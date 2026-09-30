@@ -1,5 +1,6 @@
 """Federation orchestration: rounds, selection, stragglers, SecAgg, DP (FR-01..FR-05).
 
+Secure aggregation is the full double-masking protocol in secagg/protocol.py.
 Data flow per round (SYSTEM_ARCHITECTURE.md section 3):
 select K eligible sites -> local QLoRA training -> clip + DP noise -> mask ->
 secure aggregation (dropouts recovered) -> global adapter update -> account eps.
@@ -20,7 +21,7 @@ from fedlora.coordinator.accountant import (
 from fedlora.coordinator.strategies import (
     bucketed_weight, fed_avg_factors, fed_avg_product)
 from fedlora.model import Adapter, LoRAClassifier, macro_f1, pretrain_base
-from fedlora.secagg.masking import aggregate, mask_update
+from fedlora.secagg.protocol import SecAggError, secure_sum
 from fedlora.sim.data import N_CLASSES, N_FEATURES, Split, World, make_world
 
 
@@ -147,7 +148,7 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
         if not cfg.dp:  # no DP: bucketed (coarsened) sizes weight the average
             raw = np.array([bucketed_weight(len(s.train)) for s in chosen])
             weights = raw / raw.sum()
-        raw_deltas, masked = [], {}
+        raw_deltas = []
         drops = set()
         for i, site in zip(ids, chosen):
             if sample_mode:  # per-example DP-SGD: the update is already record-level private
@@ -185,9 +186,14 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
             w = weights[survivors] / weights[survivors].sum()
             g = fed_avg_product(g, [raw_deltas[i] for i in survivors], w)
         else:
-            for i in survivors:
-                masked[i] = mask_update(raw_deltas[i] * weights[i], i, ids, session=r)
-            total = aggregate(masked, ids, session=r, min_cohort=cfg.min_cohort)
+            try:
+                total = secure_sum({i: raw_deltas[i] * weights[i] for i in ids}, session=r,
+                                   threshold=max(cfg.min_cohort, k // 2 + 1),
+                                   drop_before_upload=drops)
+            except SecAggError as e:
+                audit.record("coordinator", r, "0" * 64, event=f"round-aborted:secagg:{e}")
+                history.append(_row(r, model, world, g, acct, acct_alt, k, len(drops), aborted=True))
+                continue
             g = fed_avg_factors(g, server_lr(cfg, r) * total / weights[survivors].sum())
         history.append(_row(r, model, world, g, acct, acct_alt, k, len(drops)))
         if progress:
