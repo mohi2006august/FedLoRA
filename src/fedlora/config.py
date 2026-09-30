@@ -46,6 +46,7 @@ class FedConfig(BaseModel):
     aggregation: Literal["factors", "product"] = "factors"
     target_epsilon: float = 8.0
     delta: float = 1e-5
+    server_lr_decay: float = 0.5  # server step = 1 / (1 + decay * (round - 1))
     dropout_prob: float = 0.1
     seed: int = 0
     dp: bool = True

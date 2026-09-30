@@ -49,6 +49,13 @@ def resolve_sigma(cfg: FedConfig) -> float:
     return noise_for_budget(expected, cfg.target_epsilon, cfg.delta)
 
 
+def server_lr(cfg: FedConfig, r: int) -> float:
+    """Decaying server step: DP noise is a random walk, so later rounds move less."""
+    if not cfg.dp:
+        return 1.0
+    return 1.0 / (1.0 + cfg.server_lr_decay * (r - 1))
+
+
 def _f1(model: LoRAClassifier, split: Split, *ads: Adapter) -> float:
     return macro_f1(split.y, model.predict(split.x, *ads), N_CLASSES)
 
@@ -108,7 +115,7 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
             for i in survivors:
                 masked[i] = mask_update(raw_deltas[i] * weights[i], i, ids, session=r)
             total = aggregate(masked, ids, session=r, min_cohort=cfg.min_cohort)
-            g = fed_avg_factors(g, total / weights[survivors].sum())
+            g = fed_avg_factors(g, server_lr(cfg, r) * total / weights[survivors].sum())
         history.append(_row(r, model, world, g, acct, k, len(drops)))
         if progress:
             progress(history[-1])
