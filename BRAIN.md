@@ -1,0 +1,125 @@
+# FedLoRA Health: Brain
+
+> Second brain for this project: concepts, mental models, research, ideas and decisions. Keep it messy and alive.
+
+## 1. Why This Project
+
+It combines parameter-efficient fine-tuning, quantisation for modest hardware, privacy engineering, overfitting control on small local datasets and distillation, applied to a high-stakes domain.
+
+## 2. Concept Primers
+
+### Fine Tuning
+
+Continuing training of a pre-trained model on task- or domain-specific data to change its behaviour, style or knowledge.
+
+- **SFT**: Supervised fine-tuning on prompt → ideal response pairs.
+- **DPO / preference tuning**: Optimising directly on chosen-vs-rejected pairs without a separate reward model.
+- **Catastrophic forgetting**: Losing general capabilities while specialising.
+- **PEFT**: Parameter-efficient methods (LoRA, adapters, prefix tuning) that train a small fraction of weights.
+
+> **Mental model:** Fine-tune for form (format, tone, task behaviour). Retrieve for facts. Data quality beats data quantity almost every time.
+
+### LoRA
+
+Low-Rank Adaptation: freeze the base weights W and learn a low-rank update ΔW = B·A (rank r ≪ d), training well under 1% of parameters with small, swappable adapters.
+
+- **Rank r / alpha**: Capacity of the update and its scaling (alpha/r).
+- **Target modules**: Which projections get adapters (q,k,v,o, MLP).
+- **QLoRA**: LoRA on top of a 4-bit quantised base model; fine-tune big models on one GPU.
+- **Multi-LoRA serving**: One base model in memory serving many adapters per request (S-LoRA, Punica).
+
+> **Mental model:** The base model is the OS and adapters are apps. They are cheap to train, store and switch, so give each tenant, task or style its own adapter.
+
+### Quantization
+
+Representing weights (and sometimes activations/KV cache) with fewer bits (int8, int4, fp8) to cut memory and increase speed, with some accuracy loss.
+
+- **PTQ vs QAT**: Post-training quantisation vs quantisation-aware training.
+- **GPTQ / AWQ**: Weight-only int4 methods using second-order info or activation-aware scaling.
+- **GGUF**: llama.cpp file format with k-quants (Q4_K_M, Q5_K_M, …) for CPU/edge inference.
+- **Outliers**: A few large-magnitude activation channels that break naive quantisation.
+
+> **Mental model:** Memory bandwidth, not FLOPs, bounds LLM decoding. Halving bytes per weight roughly doubles tokens/sec until you hit compute limits.
+
+### Overfitting
+
+When a model fits noise or specifics of the training set so closely that it performs worse on unseen data; train loss keeps dropping while validation loss rises.
+
+- **Generalisation gap**: Difference between training and validation/test performance.
+- **Regularisation**: Weight decay, dropout, data augmentation, early stopping, smaller capacity.
+- **Memorisation**: Verbatim reproduction of training examples; measured with canaries or extraction probes.
+- **Data leakage**: Test information leaking into training, which hides overfitting behind inflated scores.
+
+> **Mental model:** A low training loss is a claim. The held-out set is the evidence. Always keep a test set you never tune against.
+
+### Embeddings
+
+Dense vector representations where geometric closeness reflects semantic similarity; the backbone of search, clustering, recommendation and RAG.
+
+- **Contrastive training**: Pulling positive pairs together and pushing negatives apart (e.g. InfoNCE).
+- **Matryoshka embeddings**: Vectors whose prefixes are themselves usable lower-dimensional embeddings.
+- **Anisotropy**: Embeddings crowding into a narrow cone, which hurts cosine similarity spread.
+- **Embedding drift**: Distribution shift in vectors over time or after a model upgrade.
+
+> **Mental model:** An embedding model is an opinion about what 'similar' means. Benchmarks like MTEB are a starting point, so evaluate on your own queries.
+
+### Knowledge Distillation
+
+Training a small 'student' model to mimic a large 'teacher' model's outputs (soft labels, logits, rationales), keeping most of the quality at a fraction of the cost.
+
+- **Soft targets**: Teacher probability distributions softened with temperature T carry 'dark knowledge'.
+- **KD loss**: KL divergence between teacher and student distributions, mixed with hard-label cross-entropy.
+- **Sequence-level KD**: Student trained on teacher-generated outputs (synthetic data distillation).
+- **Capacity gap**: Very large teacher/student gaps can hurt; teacher assistants bridge them.
+
+> **Mental model:** You are compressing a function, not a dataset. The teacher's uncertainty is signal, so preserve it.
+
+### LLMs
+
+Large Language Models: transformer networks trained on large text corpora to predict the next token, then aligned (SFT and RLHF/RLAIF) to follow instructions and use tools.
+
+- **Prompting**: System prompts, few-shot examples, structured outputs, tool use.
+- **Sampling**: Temperature, top-p and max tokens shape determinism and length.
+- **Evals**: Task-specific test sets plus LLM-as-judge with calibrated rubrics.
+- **Routing**: Sending each request to the cheapest model that meets its quality bar.
+
+> **Mental model:** Treat the LLM as a probabilistic component. Wrap it with evals, guardrails, retries and observability, the same way you would a flaky network dependency.
+
+## 3. What I Want to Learn
+
+- [ ] Federated learning algorithms.
+- [ ] Differential privacy accounting.
+- [ ] Secure aggregation.
+- [ ] Personalisation under non-IID data.
+
+## 4. Reading & Research List
+
+- McMahan et al., *Communication-Efficient Learning of Deep Networks from Decentralized Data* (FedAvg, 2017)
+- Li et al., *FedProx* (2020)
+- Abadi et al., *Deep Learning with Differential Privacy* (2016)
+- Bonawitz et al., *Practical Secure Aggregation* (2017)
+- Zhang et al., *FedPETuning / federated LoRA* (2023)
+
+## 5. Experiments to Run
+
+| # | Hypothesis | How to test |
+|---|---|---|
+| 1 | Personal + global adapters beat global-only on small sites | Per-site F1. |
+| 2 | ε=8 costs < 3 pts vs non-DP | Sweep noise multipliers. |
+| 3 | FedProx μ=0.01 speeds convergence under non-IID | Rounds to target. |
+
+## 6. Ideas Backlog
+
+- Federated evaluation benchmark service.
+- Federated RLHF with clinician feedback.
+- Cross-silo federated embeddings for clinical search.
+
+## 7. Decision Log
+
+| Date | Decision | Reason |
+|---|---|---|
+| YYYY-MM-DD | LoRA-only communication | Tiny updates make secure aggregation and DP practical. |
+
+## 8. Scratchpad
+
+- _Dump raw thoughts, links and half-formed ideas here._
