@@ -20,6 +20,7 @@ from fedlora.coordinator.accountant import (
     INT_ORDERS, ORDERS, PrivacyAccountant, noise_for_budget)
 from fedlora.coordinator.strategies import (
     bucketed_weight, fed_avg_factors, fed_avg_product)
+from fedlora.personalize.local import PersonalModel, personalize_site
 from fedlora.model import Adapter, LoRAClassifier, macro_f1, pretrain_base
 from fedlora.secagg.protocol import SecAggError, secure_sum
 from fedlora.sim.data import N_CLASSES, N_FEATURES, Split, World, make_world
@@ -31,7 +32,7 @@ class FedResult:
     world: World
     model: LoRAClassifier
     global_adapter: Adapter
-    personal: dict[str, Adapter]
+    personal: dict[str, PersonalModel]
     history: list[dict]
     accountant: PrivacyAccountant  # the ledger that governs the budget
     accountant_alt: PrivacyAccountant  # the other accounting, for comparison
@@ -202,17 +203,10 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
     personal = {}
     if cfg.personalize:
         for s in world.sites:
-            personal[s.site_id] = train_personal(model, s, g, cfg, rng)
+            personal[s.site_id] = personalize_site(model, s, g, cfg, rng)
     for sid, r in excluded.items():
         audit.record(sid, r, "0" * 64, event="excluded:budget")
     return FedResult(cfg, world, model, g, personal, history, acct, acct_alt, audit, excluded)
-
-
-def train_personal(model, site, g: Adapter, cfg: FedConfig, rng) -> Adapter:
-    """Personal adapter on top of the frozen global one. Never leaves the site."""
-    start = Adapter.init(N_FEATURES, N_CLASSES, cfg.rank, rng)
-    return train_adapter(model, local_data(site), start, epochs=cfg.personal_epochs,
-                         lr=cfg.lr, frozen=(g,), rng=rng)
 
 
 def _row(r, model, world, g, acct, acct_alt, k, ndrop, aborted=False) -> dict:

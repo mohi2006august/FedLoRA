@@ -60,6 +60,7 @@ def make_world(
     dirichlet_alpha: float = 0.5,
     mean_size: int = 300,
     n_canaries: int = 10,
+    heldout_size: int = 400,
 ) -> World:
     rng = np.random.default_rng(seed)
     proto = rng.normal(0, 1.6, size=(N_CLASSES, N_FEATURES))
@@ -71,7 +72,7 @@ def make_world(
         size = int(mean_size * rng.uniform(0.3, 1.7))  # heterogeneous sizes
         ys = rng.choice(N_CLASSES, size=size, p=mix)
         x = _notes(rng, proto, dialect, ys)
-        n_val = max(20, size // 5)
+        n_val = heldout_size  # large enough that per-site F1 comparisons are not pure noise
         yh = rng.choice(N_CLASSES, size=n_val, p=mix)
         xh = _notes(rng, proto, dialect, yh)
         cx = rng.dirichlet(np.full(N_FEATURES, 0.3), size=n_canaries)

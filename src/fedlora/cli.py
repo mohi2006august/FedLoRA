@@ -81,14 +81,17 @@ def sweep(sites: int = 8, seeds: int = 3, dp: bool = True,
           rounds: str = typer.Option("10", help="Comma-separated values."),
           clip_norm: str = typer.Option("1.0", help="Comma-separated values."),
           server_lr_decay: str = typer.Option("0.5", help="Comma-separated values."),
-          mu: str = typer.Option("0.01", help="Comma-separated values.")) -> None:
+          mu: str = typer.Option("0.01", help="Comma-separated values."),
+          dp_mode: str = "client", sampling: str = "fixed",
+          accounting: str = "participation") -> None:
     """Grid search averaged over seeds; reports gap to centralised and sites improved."""
     from fedlora.sim.sweep import sweep as run_sweep
 
     grid = {"lr": _floats(lr), "local_epochs": [int(v) for v in _floats(local_epochs)],
             "rounds": [int(v) for v in _floats(rounds)], "clip_norm": _floats(clip_norm),
             "server_lr_decay": _floats(server_lr_decay), "mu": _floats(mu)}
-    for row in run_sweep(grid, sites=sites, seeds=seeds, dp=dp):
+    base = {"dp_mode": dp_mode, "sampling": sampling, "accounting": accounting}
+    for row in run_sweep(grid, sites=sites, seeds=seeds, dp=dp, base=base):
         console.print(f"{row.params}  gap {row.gap_pts:5.1f} pts  improved "
                       f"{100 * row.sites_improved_frac:3.0f}%  F1 {row.global_f1:.3f}  "
                       f"eps_max {row.eps_max:.2f}")
@@ -155,6 +158,7 @@ def distill(student: str = typer.Option("3B", help="Student size: 1B, 3B or 7B."
     from fedlora.coordinator.federation import build_model
     from fedlora.distill.distiller import agreement, distill as do_distill, evaluate_student
     from fedlora.model import Adapter
+    from fedlora.personalize.local import PersonalModel
     from fedlora.sim.data import make_world
 
     f = run / "summary.json"
@@ -170,7 +174,7 @@ def distill(student: str = typer.Option("3B", help="Student size: 1B, 3B or 7B."
     sites_dir = run / "sites"
     for p in sites_dir.glob("*.npz") if sites_dir.exists() else []:
         d = np.load(p)
-        personal[p.stem] = Adapter(d["A"], d["B"])
+        personal[p.stem] = PersonalModel(Adapter(d["A"], d["B"]), float(d["g_scale"]))
     s, curve = do_distill(model, g, personal, student=student, seed=cfg.seed,
                           pool=world.public.x)
     console.print(f"student {student}: {s.n_params()} params, KD loss {curve[0]:.3f} -> "

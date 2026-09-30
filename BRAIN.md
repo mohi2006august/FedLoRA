@@ -128,13 +128,21 @@ Large Language Models: transformer networks trained on large text corpora to pre
 
 ## 8. Scratchpad
 
-- **Sweep results (2026-09-30, `fed sweep`, means over seeds, eps <= 8, delta 1e-5):**
-  - Tuned defaults: lr 1.0, 3 local epochs, rank 1 (alpha 2), clip 1.0, 20 personal epochs. Lower lr / more epochs at rank 2 was much worse (gap 13-15 pts non-DP).
-  - **8 sites, DP:** gap ~11 pts (3 rounds: 11.3; 10 rounds with server-lr decay 0.5: 10.9; without decay: 24.6). **Target <= 3 pts NOT met.** SNR of the mean update scales as K / (sigma * sqrt(d)); 8 sites is too few.
-  - **32 sites, DP:** 10 rounds, no decay: gap **1.8 pts** (5 seeds), ~70% of sites improved (22.6/32) => the <= 3 pt goal **is met** at this cohort size; with decay 0.5 the gap is 4.6.
-  - **8 sites, no DP:** gap 4.5-5.9 pts (non-IID drift), ~5.4/8 sites improved.
-  - **Sites improved vs local-only** stays at 50-70%, not 100%: local-only models fit each site's own dialect well. Not yet met.
-  - Experiment 1 (personal + global vs global-only) and 3 (FedProx mu 0.01 vs 0) show little difference on these settings (mu 0.1 slightly worse); experiment 2 (eps=8 cost vs non-DP): ~6 pts at 8 sites, ~0 at 32 sites.
-  - Rank 1 beats rank 2 under DP because noise scales with parameter count.
-- **Sampling amplification (added):** `--sampling poisson --accounting amplified` uses the sampled-Gaussian RDP (matches Opacus 1.6.0 to 1e-6). At 8 sites, 6 per round, 10 rounds (seed 0) the gap drops to 2.8 pts (single seed; re-run `fed sweep` before quoting). **Caveat:** the coordinator picks the cohort, so against the coordinator the honest number is the participation ledger (worst site eps 9.47 > 8 in that run). `fed privacy report` prints both.
+- **Sweep results (2026-10-01, `fed sweep`, 5 seeds (3 at 32 sites), eps <= 8, delta 1e-5, 400-note held-out sets, fair local-only baseline with the same rank/epochs/selection):**
+
+  | Setup | Gap to centralised | Sites beating local-only |
+  |---|---|---|
+  | 8 sites, no DP | 5.7 pts | 85% |
+  | 8 sites, client-level DP, decay 0.5 | 6.7 pts | 60% |
+  | 8 sites, client-level DP, decay 0 | 17.3 pts | 42% |
+  | 8 sites, Poisson + amplified accounting | 9.3 pts | 70% |
+  | 32 sites, client-level DP, decay 0 | **2.1 pts** (meets <= 3) | 82% |
+  | 32 sites, client-level DP, decay 0.5 | 4.9 pts | 70% |
+
+  - Targets still missed: gap <= 3 pts at 8 sites; "100% of sites improved". A site with lots of data gains little from a noisy global adapter, so 100% is not a sensible target; ~60-85% is what this simulation gives.
+  - Earlier single-seed numbers in this log (gap 1.8 at 32 sites, 2.8 amplified at 8 sites) came from a 60-note held-out set where per-site F1 comparisons were mostly noise; they are superseded by the table above.
+  - Personalisation: each site chooses (global scale in {0, .25, .5, .75, 1}, epochs) on a local validation split (rank-2 personal adapter). Selection matters most under DP; the noisy global adapter is often down-weighted.
+  - Rank 1 global adapter beats rank 2 under DP (noise grows with parameter count). Lr 1.0 / 3 local epochs beat lower lr / fewer epochs by a wide margin.
+  - FedProx mu 0.01 vs 0 and mu 0.1: no meaningful difference on these settings.
+- **Sampling amplification (added):** `--sampling poisson --accounting amplified` uses the sampled-Gaussian RDP (matches Opacus 1.6.0 to 1e-6). **Caveat:** the coordinator picks the cohort, so against the coordinator the honest number is the participation ledger; `fed privacy report` prints both. The gap with amplified accounting at 8 sites is in the table above (it did not reach the target).
 - **Per-example DP-SGD (added, `--dp-mode sample`):** record-level guarantee via per-example clipping + Poisson batches; eps composes over all local steps (sampled-Gaussian RDP, no client-sampling amplification). 8 sites, 10 rounds, seed 0: F1 0.81 (client-level: 0.82), worst eps 7.7, one small site excluded at round 6 because its batch rate q is larger. The two guarantees differ: client-level hides a site's whole contribution; sample-level hides each note but not participation.

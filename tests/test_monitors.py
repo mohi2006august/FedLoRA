@@ -17,6 +17,8 @@ def _overfit_setup():
     model = build_model(w, cfg)
     rng = np.random.default_rng(0)
     s = w.sites[0]
+    # Random labels make memorisation (not generalisation) the only way to fit the data.
+    s.train.y = rng.integers(0, N_CLASSES, len(s.train))
     ad = train_adapter(model, local_data(s), Adapter.init(N_FEATURES, N_CLASSES, 8, rng),
                        epochs=400, lr=2.0, rng=rng)
     return w, cfg, model, s, ad

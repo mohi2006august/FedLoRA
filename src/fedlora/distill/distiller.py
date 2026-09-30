@@ -48,11 +48,11 @@ def synthetic_prompts(n: int, seed: int = 0, pool: np.ndarray | None = None) -> 
     return mix / mix.sum(1, keepdims=True)
 
 
-def teacher_probs(model: LoRAClassifier, x, g: Adapter, personal: dict[str, Adapter] | None,
+def teacher_probs(model: LoRAClassifier, x, g: Adapter, personal: dict | None,
                   T: float) -> np.ndarray:
     ps = [softmax(model.logits(x, g) / T)]
-    for p in (personal or {}).values():
-        ps.append(softmax(model.logits(x, g, p) / T))
+    for pm in (personal or {}).values():  # PersonalModel: labels computed at the owning site
+        ps.append(softmax(model.logits(x, *pm.adapters(g)) / T))
     return np.mean(ps, axis=0)
 
 
@@ -61,7 +61,7 @@ def kd_loss(student_logits, teacher_p, T: float) -> float:
     return float((teacher_p * (np.log(teacher_p + 1e-12) - np.log(q + 1e-12))).sum(1).mean())
 
 
-def distill(model: LoRAClassifier, g: Adapter, personal: dict[str, Adapter] | None = None, *,
+def distill(model: LoRAClassifier, g: Adapter, personal: dict | None = None, *,
             student: str = "3B", n_prompts: int = 4000, T: float = 2.0, epochs: int = 300,
             lr: float = 0.5, seed: int = 0,
             pool: np.ndarray | None = None) -> tuple[Student, list[float]]:

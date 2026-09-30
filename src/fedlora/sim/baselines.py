@@ -7,6 +7,7 @@ from fedlora.client.qlora_client import local_data, train_adapter
 from fedlora.config import FedConfig
 from fedlora.coordinator.federation import build_model
 from fedlora.model import Adapter, macro_f1
+from fedlora.personalize.local import personalize_site
 from fedlora.sim.data import N_CLASSES, N_FEATURES, Split, World
 
 
@@ -26,15 +27,22 @@ def centralised(world: World, cfg: FedConfig, epochs: int | None = None) -> dict
 
 
 def local_only(world: World, cfg: FedConfig, epochs: int | None = None) -> dict:
-    """Each site trains alone on its own notes. Returns per-site held-out F1."""
+    """Each site trains alone on its own notes; returns per-site held-out F1.
+
+    Fair to the federated+personal model: same adapter rank, epoch budget and local
+    validation-based epoch selection; the only difference is that the global adapter is
+    unavailable (g_scale fixed to 0).
+    """
     rng = np.random.default_rng(cfg.seed + 2)
     model = build_model(world, cfg)
+    solo = cfg.model_copy(update={"personal_scales": (0.0,), "personal_select": True})
+    g0 = _init(cfg, rng)  # unused when g_scale == 0
     out = {}
     for s in world.sites:
-        ad = train_adapter(model, local_data(s), _init(cfg, rng),
-                           epochs=epochs or cfg.rounds * cfg.local_epochs, lr=cfg.lr, rng=rng)
+        pm = personalize_site(model, s, g0, solo, rng)
+        ads = pm.adapters(g0)
         out[s.site_id] = {
-            "heldout_f1": macro_f1(s.heldout.y, model.predict(s.heldout.x, ad), N_CLASSES),
-            "test_f1": macro_f1(world.test.y, model.predict(world.test.x, ad), N_CLASSES),
+            "heldout_f1": macro_f1(s.heldout.y, model.predict(s.heldout.x, *ads), N_CLASSES),
+            "test_f1": macro_f1(world.test.y, model.predict(world.test.x, *ads), N_CLASSES),
         }
     return out

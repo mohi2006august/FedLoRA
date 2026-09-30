@@ -52,6 +52,9 @@ class FedConfig(BaseModel):
     dp: bool = True
     personalize: bool = True
     personal_epochs: int = 20
+    personal_rank: int | None = 2  # None = same as the global rank
+    personal_select: bool = True  # pick (g_scale, epochs) on a local validation split
+    personal_scales: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
     dirichlet_alpha: float = Field(0.5, description="non-IID label skew; lower = more skew")
     dp_mode: Literal["client", "sample"] = Field(
         "client", description="client: clip+noise the whole update (user-level). "

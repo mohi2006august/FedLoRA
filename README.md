@@ -33,7 +33,7 @@ pytest
 | FR-07 | Distillation | Done on synthetic prompts |
 | FR-08 | Federated embeddings | Done (linear, InfoNCE) |
 
-**Known results** (`fed sweep`, seeds averaged, eps <= 8; details in `BRAIN.md`): at 32 sites with DP the gap to centralised is ~1.8 pts (meets the <= 3 target) but only ~70% of sites beat local-only; at 8 sites the gap is ~11 pts because DP noise dominates a small cohort. The "100% of sites improved" target is not met.
+**Known results** (`fed sweep`, seeds averaged, eps <= 8; table in `BRAIN.md`): with DP at 32 sites the gap to centralised is ~2.1 pts (meets the <= 3 target) and ~82% of sites beat a fair local-only baseline; at 8 sites the gap is ~7 pts and ~60% of sites improve because DP noise dominates a small cohort. The "100% of sites improved" target is not met and is not realistic for sites that already have plenty of data.
 
 ## Docs
 
