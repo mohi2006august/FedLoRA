@@ -34,10 +34,10 @@ class FedConfig(BaseModel):
     rounds: int = 10
     clients_per_round: int = 8
     min_cohort: int = 3  # minimum cohort for SecAgg/DP (gradient-inversion defence)
-    local_epochs: int = 1
-    lr: float = 0.3
-    rank: int = 2
-    alpha: float = 4.0
+    local_epochs: int = 3
+    lr: float = 1.0
+    rank: int = 1
+    alpha: float = 2.0
     clip_norm: float = 1.0
     noise_multiplier: float | None = Field(
         None, description="sigma; None = calibrate so expected participations fit target_epsilon")
@@ -51,7 +51,7 @@ class FedConfig(BaseModel):
     seed: int = 0
     dp: bool = True
     personalize: bool = True
-    personal_epochs: int = 5
+    personal_epochs: int = 20
     dirichlet_alpha: float = Field(0.5, description="non-IID label skew; lower = more skew")
 
 

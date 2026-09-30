@@ -67,6 +67,30 @@ def sim(sites: int = typer.Option(8, help="Number of synthetic hospitals."),
     _run(cfg, out)
 
 
+def _floats(text: str) -> list[float]:
+    return [float(x) for x in text.split(",")]
+
+
+@app.command()
+def sweep(sites: int = 8, seeds: int = 3, dp: bool = True,
+          lr: str = typer.Option("1.0", help="Comma-separated values."),
+          local_epochs: str = typer.Option("3", help="Comma-separated values."),
+          rounds: str = typer.Option("10", help="Comma-separated values."),
+          clip_norm: str = typer.Option("1.0", help="Comma-separated values."),
+          server_lr_decay: str = typer.Option("0.5", help="Comma-separated values."),
+          mu: str = typer.Option("0.01", help="Comma-separated values.")) -> None:
+    """Grid search averaged over seeds; reports gap to centralised and sites improved."""
+    from fedlora.sim.sweep import sweep as run_sweep
+
+    grid = {"lr": _floats(lr), "local_epochs": [int(v) for v in _floats(local_epochs)],
+            "rounds": [int(v) for v in _floats(rounds)], "clip_norm": _floats(clip_norm),
+            "server_lr_decay": _floats(server_lr_decay), "mu": _floats(mu)}
+    for row in run_sweep(grid, sites=sites, seeds=seeds, dp=dp):
+        console.print(f"{row.params}  gap {row.gap_pts:5.1f} pts  improved "
+                      f"{100 * row.sites_improved_frac:3.0f}%  F1 {row.global_f1:.3f}  "
+                      f"eps_max {row.eps_max:.2f}")
+
+
 @coordinator.command("start")
 def coordinator_start(config: Path = typer.Option(..., help="fed.yaml"), out: Path = RUNS) -> None:
     """Run the coordinator from a config file (in-process simulated transport)."""

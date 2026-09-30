@@ -47,3 +47,9 @@ def test_bucketing_and_ledger_warning():
 
 def test_client_join_refuses_without_transport():
     assert runner.invoke(app, ["client", "join", "--site", "hospital-a"]).exit_code == 2
+
+
+def test_sweep_command_runs():
+    r = runner.invoke(app, ["sweep", "--sites", "4", "--seeds", "1", "--rounds", "2,3"])
+    assert r.exit_code == 0, r.output
+    assert r.output.count("gap") == 2

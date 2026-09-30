@@ -127,5 +127,12 @@ Large Language Models: transformer networks trained on large text corpora to pre
 
 ## 8. Scratchpad
 
-- **Finding (simulation, seed 0, default hyperparameters, 8 rounds):** the PRD targets (<= 3 pts to centralised, 100% of sites improved vs local-only) are **not met**. `fed sim --sites 8`: global F1 ~0.82 vs centralised ~0.90-0.98 (gap 8-10 pts); with 32 sites the DP gap was 13 pts. Non-DP FedProx with label-skewed sites also converges slowly and noisily in 10 rounds, so part of the gap is non-IID drift and untuned lr/epochs, not only DP noise. Results are noisy across hyperparameters (see `git log`); treat as a baseline to tune, and run the sweeps in section 5 before claiming any improvement.
+- **Sweep results (2026-09-30, `fed sweep`, means over seeds, eps <= 8, delta 1e-5):**
+  - Tuned defaults: lr 1.0, 3 local epochs, rank 1 (alpha 2), clip 1.0, 20 personal epochs. Lower lr / more epochs at rank 2 was much worse (gap 13-15 pts non-DP).
+  - **8 sites, DP:** gap ~11 pts (3 rounds: 11.3; 10 rounds with server-lr decay 0.5: 10.9; without decay: 24.6). **Target <= 3 pts NOT met.** SNR of the mean update scales as K / (sigma * sqrt(d)); 8 sites is too few.
+  - **32 sites, DP:** 10 rounds, no decay: gap **1.8 pts** (5 seeds), ~70% of sites improved (22.6/32) => the <= 3 pt goal **is met** at this cohort size; with decay 0.5 the gap is 4.6.
+  - **8 sites, no DP:** gap 4.5-5.9 pts (non-IID drift), ~5.4/8 sites improved.
+  - **Sites improved vs local-only** stays at 50-70%, not 100%: local-only models fit each site's own dialect well. Not yet met.
+  - Experiment 1 (personal + global vs global-only) and 3 (FedProx mu 0.01 vs 0) show little difference on these settings (mu 0.1 slightly worse); experiment 2 (eps=8 cost vs non-DP): ~6 pts at 8 sites, ~0 at 32 sites.
+  - Rank 1 beats rank 2 under DP because noise scales with parameter count.
 - Open: real Opacus DP-SGD (per-example) instead of client-level clipping; sampling-amplified accounting.

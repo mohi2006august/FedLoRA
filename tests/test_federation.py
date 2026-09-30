@@ -7,7 +7,8 @@ from fedlora.model import Adapter
 
 
 def test_federation_improves_over_first_round_without_dp():
-    r = run_federation(FedConfig(dp=False, rounds=20, local_epochs=2, lr=0.5, personalize=False))
+    r = run_federation(FedConfig(dp=False, rounds=20, rank=2, alpha=4.0, local_epochs=2, lr=0.5,
+                                 personalize=False))
     assert r.history[-1]["global_f1"] >= r.history[0]["global_f1"] - 0.01
     assert r.history[-1]["global_f1"] > 0.9
     assert r.audit.verify_chain()

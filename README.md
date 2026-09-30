@@ -10,10 +10,11 @@ Only LoRA adapter updates leave a site. This repository is a **numpy simulation*
 
 ```bash
 pip install -e ".[dev]"     # or: uv sync
-fed sim --sites 8           # simulate; writes runs/latest/ (summary, ledger, audit, model card)
+fed sim --sites 8           # simulate (try --sites 32 --clients-per-round 32); writes runs/latest/ (summary, ledger, audit, model card)
 fed privacy report          # epsilon ledger + audit-chain verification
 fed distill --student 3B    # distil into a compact student (1B / 3B / 7B analogues)
 fed coordinator start --config fed.yaml
+fed sweep --sites 32 --rounds 10 --server-lr-decay 0,0.5   # hyper-parameter grid
 pytest
 ```
 
@@ -32,7 +33,7 @@ pytest
 | FR-07 | Distillation | Done on synthetic prompts |
 | FR-08 | Federated embeddings | Done (linear, InfoNCE) |
 
-**Known result:** with default settings the simulated federation does *not* yet meet the PRD's <= 3 pt gap to centralised under eps <= 8 (see `BRAIN.md` finding). No claim of improvement is made without running the sweeps.
+**Known results** (`fed sweep`, seeds averaged, eps <= 8; details in `BRAIN.md`): at 32 sites with DP the gap to centralised is ~1.8 pts (meets the <= 3 target) but only ~70% of sites beat local-only; at 8 sites the gap is ~11 pts because DP noise dominates a small cohort. The "100% of sites improved" target is not met.
 
 ## Docs
 
