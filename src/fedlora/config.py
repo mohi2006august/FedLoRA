@@ -53,6 +53,11 @@ class FedConfig(BaseModel):
     personalize: bool = True
     personal_epochs: int = 20
     dirichlet_alpha: float = Field(0.5, description="non-IID label skew; lower = more skew")
+    dp_mode: Literal["client", "sample"] = Field(
+        "client", description="client: clip+noise the whole update (user-level). "
+        "sample: per-example DP-SGD (record-level), protects each note.")
+    dpsgd_batch: int = 64
+    dpsgd_clip: float = 1.0  # per-example gradient clip
     sampling: Literal["fixed", "poisson"] = "fixed"
     accounting: Literal["participation", "amplified"] = Field(
         "participation",
@@ -64,6 +69,8 @@ class FedConfig(BaseModel):
     def _amplified_needs_poisson(self):
         if self.accounting == "amplified" and self.sampling != "poisson":
             raise ValueError("accounting='amplified' requires sampling='poisson'")
+        if self.dp_mode == "sample" and self.accounting == "amplified":
+            raise ValueError("dp_mode='sample' does not credit client-sampling amplification")
         return self
 
 

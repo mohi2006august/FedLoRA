@@ -85,14 +85,16 @@ class PrivacyAccountant:
     rounds: dict[str, int] = field(default_factory=dict)
     ledger: list[dict] = field(default_factory=list)
 
-    def _inc(self, sigma: float, q: float) -> list[float]:
+    def _inc(self, sigma: float, q: float, steps: int = 1) -> list[float]:
         if sigma <= 0:
             return [math.inf] * len(self.orders)
-        return gaussian_rdp(sigma, 1, self.orders, q)
+        return gaussian_rdp(sigma, steps, self.orders, q)
 
-    def step(self, site_id: str, sigma: float, round_no: int, q: float = 1.0) -> float:
+    def step(self, site_id: str, sigma: float, round_no: int, q: float = 1.0,
+             steps: int = 1) -> float:
+        """Charge `steps` compositions of the (sampled) Gaussian mechanism."""
         cur = self.rdp.setdefault(site_id, [0.0] * len(self.orders))
-        self.rdp[site_id] = [c + i for c, i in zip(cur, self._inc(sigma, q))]
+        self.rdp[site_id] = [c + i for c, i in zip(cur, self._inc(sigma, q, steps))]
         self.rounds[site_id] = self.rounds.get(site_id, 0) + 1
         eps = self.epsilon(site_id)
         self.ledger.append({"site": site_id, "round": round_no, "epsilon": eps})
@@ -103,12 +105,12 @@ class PrivacyAccountant:
             return 0.0
         return rdp_to_eps(self.rdp[site_id], self.delta, self.orders)
 
-    def would_exceed(self, site_id: str, sigma: float, q: float = 1.0) -> bool:
+    def would_exceed(self, site_id: str, sigma: float, q: float = 1.0, steps: int = 1) -> bool:
         """True if one more charge would push the site past budget."""
         if sigma <= 0:
             return True
         cur = self.rdp.get(site_id, [0.0] * len(self.orders))
-        nxt = [c + i for c, i in zip(cur, self._inc(sigma, q))]
+        nxt = [c + i for c, i in zip(cur, self._inc(sigma, q, steps))]
         return rdp_to_eps(nxt, self.delta, self.orders) > self.budget
 
     def exhausted(self, site_id: str) -> bool:
@@ -116,7 +118,11 @@ class PrivacyAccountant:
 
 
 def noise_for_budget(rounds: int, target_eps: float, delta: float, q: float = 1.0) -> float:
-    """Smallest sigma (bisection) with eps(rounds, q) <= target_eps."""
+    """Smallest sigma (bisection) with eps(rounds, q) <= target_eps.
+
+    `rounds` counts compositions of the mechanism (rounds for client-level DP, optimiser steps
+    for DP-SGD).
+    """
     lo, hi = 0.05, 200.0
     for _ in range(60):
         mid = (lo + hi) / 2

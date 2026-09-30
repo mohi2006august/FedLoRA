@@ -56,6 +56,7 @@ def sim(sites: int = typer.Option(8, help="Number of synthetic hospitals."),
             0, help="Sites per round; 0 = 90% of sites (larger cohorts help DP)."),
         epsilon: float = 8.0, dp: bool = True, personalize: bool = True,
         strategy: str = "fedprox", aggregation: str = "factors", seed: int = 0,
+        dp_mode: str = typer.Option("client", help="client (update-level) | sample (DP-SGD)"),
         sampling: str = typer.Option("fixed", help="fixed | poisson"),
         accounting: str = typer.Option("participation", help="participation | amplified"),
         out: Path = RUNS) -> None:
@@ -65,7 +66,7 @@ def sim(sites: int = typer.Option(8, help="Number of synthetic hospitals."),
     cohort = clients_per_round or max(3, int(round(0.9 * sites)))
     cfg = FedConfig(sites=sites, rounds=rounds, clients_per_round=cohort, target_epsilon=epsilon, dp=dp,
                     personalize=personalize, strategy=strategy, aggregation=aggregation,
-                    seed=seed, sampling=sampling, accounting=accounting)
+                    seed=seed, sampling=sampling, accounting=accounting, dp_mode=dp_mode)
     _run(cfg, out)
 
 
@@ -122,11 +123,14 @@ def privacy_report(run: Path = RUNS) -> None:
         raise typer.Exit(code=1)
     led = json.loads(f.read_text(encoding="utf-8"))
     console.print(privacy_ledger(led["eps"], led["budget"], led["delta"]))
-    if led.get("accounting") == "amplified":
+    if led.get("dp_mode") == "sample":
+        console.print("Guarantee: record-level (DP-SGD) - each patient note is protected; "
+                      "a site's participation is not hidden.")
+    elif led.get("accounting") == "amplified":
         worst = max(led["eps_alt"].values())
         console.print(f"Accounting: amplified (Poisson sampling credited; valid only if sampling is "
                       f"hidden from the adversary). Coordinator-visible worst-case eps: {worst:.2f}")
-    elif led.get("eps_alt"):
+    elif led.get("eps_alt") and led.get("dp_mode") != "sample":
         console.print(f"Accounting: participation (valid against the coordinator). "
                       f"If sampling were hidden, worst-site eps would be "
                       f"{max(led['eps_alt'].values()):.2f}")

@@ -11,11 +11,12 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from fedlora.client.dp import add_noise, clip_update
+from fedlora.client.dpsgd import dpsgd_delta, steps_per_round
 from fedlora.client.qlora_client import local_data, local_update, train_adapter
 from fedlora.compliance.audit import AuditLog, update_sha256
 from fedlora.config import FedConfig, RoundConfig
 from fedlora.coordinator.accountant import (
-    INT_ORDERS, PrivacyAccountant, noise_for_budget)
+    INT_ORDERS, ORDERS, PrivacyAccountant, noise_for_budget)
 from fedlora.coordinator.strategies import (
     bucketed_weight, fed_avg_factors, fed_avg_product)
 from fedlora.model import Adapter, LoRAClassifier, macro_f1, pretrain_base
@@ -42,7 +43,7 @@ def build_model(world: World, cfg: FedConfig) -> LoRAClassifier:
     return LoRAClassifier(w0, b0, cfg.alpha, cfg.rank, quantize=True)
 
 
-def resolve_sigma(cfg: FedConfig) -> float:
+def resolve_sigma(cfg: FedConfig, world: World | None = None) -> float:
     """Explicit sigma, else the smallest noise multiplier fitting the eps budget.
 
     Sigma is the multiplier *before* dropouts: the noise actually present in a released sum
@@ -51,6 +52,14 @@ def resolve_sigma(cfg: FedConfig) -> float:
     if cfg.noise_multiplier is not None:
         return cfg.noise_multiplier
     k = min(cfg.clients_per_round, cfg.sites)
+    if cfg.dp_mode == "sample":
+        if world is None:
+            raise ValueError("dp_mode='sample' needs the world to size the batches")
+        n = int(np.percentile([len(local_data(s)) for s in world.sites], 25))
+        participations = int(np.ceil(1.25 * cfg.rounds * k / cfg.sites))
+        steps = participations * steps_per_round(n, cfg.dpsgd_batch, cfg.local_epochs)
+        return noise_for_budget(steps, cfg.target_epsilon, cfg.delta,
+                                q=min(1.0, cfg.dpsgd_batch / n))
     if cfg.accounting == "amplified":
         needed = noise_for_budget(cfg.rounds, cfg.target_epsilon, cfg.delta, q=k / cfg.sites)
     else:
@@ -63,6 +72,14 @@ def min_release(cfg: FedConfig, k_target: int) -> int:
     """Fewest survivors for which a round is released. Fixes the lowest noise a release can
     carry (sigma*sqrt(min_release/k_target)), which the budget guard and the abort rule share."""
     return max(cfg.min_cohort, int(np.ceil(0.6 * k_target)))
+
+
+def _over_budget(cfg, acct, site, sigma, floor, q_g, sample_mode) -> bool:
+    if sample_mode:
+        n = len(local_data(site))
+        return acct.would_exceed(site.site_id, sigma, min(1.0, cfg.dpsgd_batch / n),
+                                 steps_per_round(n, cfg.dpsgd_batch, cfg.local_epochs))
+    return acct.would_exceed(site.site_id, floor, q_g)
 
 
 def server_lr(cfg: FedConfig, r: int) -> float:
@@ -82,12 +99,14 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
     model = build_model(world, cfg)
     g = Adapter.init(N_FEATURES, N_CLASSES, cfg.rank, rng)
     amp = cfg.accounting == "amplified"
-    acct_part = PrivacyAccountant(delta=cfg.delta, budget=cfg.target_epsilon)
+    acct_part = PrivacyAccountant(delta=cfg.delta, budget=cfg.target_epsilon,
+                                  orders=list(INT_ORDERS if cfg.dp_mode == "sample" else ORDERS))
     acct_amp = PrivacyAccountant(delta=cfg.delta, budget=cfg.target_epsilon,
                                  orders=list(INT_ORDERS))
     acct, acct_alt = (acct_amp, acct_part) if amp else (acct_part, acct_amp)
     audit = AuditLog()
-    sigma = resolve_sigma(cfg) if cfg.dp else 0.0
+    sigma = resolve_sigma(cfg, world) if cfg.dp else 0.0
+    sample_mode = cfg.dp and cfg.dp_mode == "sample"
     history, excluded = [], {}
 
     for r in range(1, cfg.rounds + 1):
@@ -98,8 +117,8 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
             k_t = min(cfg.clients_per_round, len(eligible))
             q_g = k_t / max(len(eligible), 1) if amp else 1.0
             floor = sigma * float(np.sqrt(min_release(cfg, k_t) / max(k_t, 1)))
-            keep = [s for s in eligible
-                    if not (cfg.dp and acct.would_exceed(s.site_id, floor, q_g))]
+            keep = [s for s in eligible if not (cfg.dp and _over_budget(
+                cfg, acct, s, sigma, floor, q_g, sample_mode))]
             if len(keep) == len(eligible):
                 break
             eligible = keep
@@ -131,9 +150,18 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
         raw_deltas, masked = [], {}
         drops = set()
         for i, site in zip(ids, chosen):
-            delta = local_update(model, site, g, epochs=rc.local_epochs, lr=rc.lr,
-                                 strategy=rc.strategy, mu=rc.mu, rng=rng)
-            if cfg.dp:
+            if sample_mode:  # per-example DP-SGD: the update is already record-level private
+                delta, q_site = dpsgd_delta(
+                    model, local_data(site), g, epochs=rc.local_epochs, lr=rc.lr,
+                    batch=cfg.dpsgd_batch, clip=cfg.dpsgd_clip, sigma=sigma, rng=rng,
+                    mu=rc.mu if rc.strategy == "fedprox" else 0.0, anchor=g)
+                acct_part.step(site.site_id, sigma, r, q=q_site,
+                               steps=steps_per_round(len(local_data(site)), cfg.dpsgd_batch,
+                                                     rc.local_epochs))
+            else:
+                delta = local_update(model, site, g, epochs=rc.local_epochs, lr=rc.lr,
+                                     strategy=rc.strategy, mu=rc.mu, rng=rng)
+            if cfg.dp and not sample_mode:
                 delta, _ = clip_update(delta, rc.clip_norm)
                 # per-client std sigma*C/sqrt(target) => sum of n clients has std sigma*C*sqrt(n/target)
                 delta = add_noise(delta, rc.clip_norm, sigma, k_target, rng)
@@ -146,7 +174,7 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
             audit.record("coordinator", r, "0" * 64, event="round-aborted:dropouts")
             history.append(_row(r, model, world, g, acct, acct_alt, k, len(drops), aborted=True))
             continue
-        if cfg.dp:  # a sum was released: charge it
+        if cfg.dp and not sample_mode:  # a sum was released: charge it
             sigma_eff = sigma * float(np.sqrt(len(survivors) / k_target))
             for site in chosen:
                 acct_part.step(site.site_id, sigma_eff, r)

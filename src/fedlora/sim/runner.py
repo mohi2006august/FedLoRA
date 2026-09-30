@@ -60,7 +60,8 @@ def run_and_save(cfg: FedConfig, out: Path, progress=None) -> tuple[FedResult, d
     save_json(out / "ledger.json", {"budget": cfg.target_epsilon, "delta": cfg.delta,
                                     "entries": res.accountant.ledger,
                                     "eps": summary["eps"], "eps_alt": summary["eps_alt"],
-                                    "accounting": cfg.accounting, "excluded": res.excluded})
+                                    "accounting": cfg.accounting, "dp_mode": cfg.dp_mode,
+                                    "excluded": res.excluded})
     (out / "sites").mkdir(exist_ok=True)
     for sid, ad in res.personal.items():  # simulation only: stays in the site's own folder
         np.savez(out / "sites" / f"{sid}.npz", A=ad.A, B=ad.B)
