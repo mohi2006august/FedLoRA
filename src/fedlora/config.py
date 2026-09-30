@@ -31,15 +31,16 @@ class FedConfig(BaseModel):
     """Whole-federation configuration (fed.yaml)."""
 
     sites: int = 8
-    rounds: int = 30
-    clients_per_round: int = 6
+    rounds: int = 10
+    clients_per_round: int = 8
     min_cohort: int = 3  # minimum cohort for SecAgg/DP (gradient-inversion defence)
-    local_epochs: int = 2
-    lr: float = 0.5
-    rank: int = 4
-    alpha: float = 8.0
+    local_epochs: int = 1
+    lr: float = 0.3
+    rank: int = 2
+    alpha: float = 4.0
     clip_norm: float = 1.0
-    noise_multiplier: float = 0.8
+    noise_multiplier: float | None = Field(
+        None, description="sigma; None = calibrate so expected participations fit target_epsilon")
     strategy: Literal["fedavg", "fedprox"] = "fedprox"
     mu: float = 0.01
     aggregation: Literal["factors", "product"] = "factors"
