@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RoundConfig(BaseModel):
@@ -53,6 +53,18 @@ class FedConfig(BaseModel):
     personalize: bool = True
     personal_epochs: int = 20
     dirichlet_alpha: float = Field(0.5, description="non-IID label skew; lower = more skew")
+    sampling: Literal["fixed", "poisson"] = "fixed"
+    accounting: Literal["participation", "amplified"] = Field(
+        "participation",
+        description="participation: every participant pays full sigma (valid against the "
+        "coordinator). amplified: credits Poisson sampling (valid only against an adversary "
+        "that cannot see who was sampled).")
+
+    @model_validator(mode="after")
+    def _amplified_needs_poisson(self):
+        if self.accounting == "amplified" and self.sampling != "poisson":
+            raise ValueError("accounting='amplified' requires sampling='poisson'")
+        return self
 
 
 def bucket_size(n: int) -> str:

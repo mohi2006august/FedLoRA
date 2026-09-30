@@ -61,3 +61,28 @@ def test_product_aggregation_is_faithful():
     err_fac = np.linalg.norm(fac.B @ fac.A - true)
     assert err_prod <= err_fac + 1e-9
     assert refactor(true, g).A.shape == g.A.shape
+
+
+def test_amplified_requires_poisson_sampling():
+    import pytest
+    with pytest.raises(ValueError):
+        FedConfig(accounting="amplified")
+
+
+def test_amplified_accounting_needs_less_noise_and_stays_in_budget():
+    from fedlora.coordinator.federation import resolve_sigma
+    base = dict(sites=8, clients_per_round=4, rounds=10, sampling="poisson", personalize=False)
+    part = FedConfig(accounting="participation", **base)
+    amp = FedConfig(accounting="amplified", **base)
+    assert resolve_sigma(amp) < resolve_sigma(part)
+    r = run_federation(amp)
+    assert all(r.accountant.epsilon(s.site_id) <= amp.target_epsilon for s in r.world.sites)
+    # the conservative (participant-visible) ledger is reported alongside and is larger
+    assert max(r.accountant_alt.epsilon(s.site_id) for s in r.world.sites) >= \
+        max(r.accountant.epsilon(s.site_id) for s in r.world.sites) * 0.5
+
+
+def test_poisson_cohort_size_varies():
+    r = run_federation(FedConfig(dp=False, sampling="poisson", clients_per_round=4, rounds=12,
+                                 personalize=False, dropout_prob=0.0))
+    assert len({h["participants"] for h in r.history}) > 1

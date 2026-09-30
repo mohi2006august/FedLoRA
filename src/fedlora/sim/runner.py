@@ -41,6 +41,8 @@ def summarise(res: FedResult, progress=None) -> dict:
         "rounds_run": len(res.history), "last_round": res.history[-1] if res.history else
         {"round": 0, "participants": 0, "global_f1": 0.0},
         "eps": {s.site_id: res.accountant.epsilon(s.site_id) for s in w.sites},
+        "eps_alt": {s.site_id: res.accountant_alt.epsilon(s.site_id) for s in w.sites},
+        "accounting": cfg.accounting,
         "budget": cfg.target_epsilon, "delta": cfg.delta, "excluded": res.excluded,
         "centralised_f1": cen["test_f1"],
         "gap_to_centralised_pts": 100 * (cen["test_f1"] - fed_f1),
@@ -57,7 +59,8 @@ def run_and_save(cfg: FedConfig, out: Path, progress=None) -> tuple[FedResult, d
     save_json(out / "summary.json", summary)
     save_json(out / "ledger.json", {"budget": cfg.target_epsilon, "delta": cfg.delta,
                                     "entries": res.accountant.ledger,
-                                    "eps": summary["eps"], "excluded": res.excluded})
+                                    "eps": summary["eps"], "eps_alt": summary["eps_alt"],
+                                    "accounting": cfg.accounting, "excluded": res.excluded})
     (out / "sites").mkdir(exist_ok=True)
     for sid, ad in res.personal.items():  # simulation only: stays in the site's own folder
         np.savez(out / "sites" / f"{sid}.npz", A=ad.A, B=ad.B)

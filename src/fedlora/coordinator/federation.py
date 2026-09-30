@@ -14,7 +14,8 @@ from fedlora.client.dp import add_noise, clip_update
 from fedlora.client.qlora_client import local_data, local_update, train_adapter
 from fedlora.compliance.audit import AuditLog, update_sha256
 from fedlora.config import FedConfig, RoundConfig
-from fedlora.coordinator.accountant import PrivacyAccountant, noise_for_budget
+from fedlora.coordinator.accountant import (
+    INT_ORDERS, PrivacyAccountant, noise_for_budget)
 from fedlora.coordinator.strategies import (
     bucketed_weight, fed_avg_factors, fed_avg_product)
 from fedlora.model import Adapter, LoRAClassifier, macro_f1, pretrain_base
@@ -30,7 +31,8 @@ class FedResult:
     global_adapter: Adapter
     personal: dict[str, Adapter]
     history: list[dict]
-    accountant: PrivacyAccountant
+    accountant: PrivacyAccountant  # the ledger that governs the budget
+    accountant_alt: PrivacyAccountant  # the other accounting, for comparison
     audit: AuditLog
     excluded: dict[str, int] = field(default_factory=dict)
 
@@ -41,12 +43,26 @@ def build_model(world: World, cfg: FedConfig) -> LoRAClassifier:
 
 
 def resolve_sigma(cfg: FedConfig) -> float:
-    """Explicit sigma, else the smallest sigma fitting the eps budget for the expected
-    number of participations (with 25% margin; budget exclusion enforces the hard cap)."""
+    """Explicit sigma, else the smallest noise multiplier fitting the eps budget.
+
+    Sigma is the multiplier *before* dropouts: the noise actually present in a released sum
+    is sigma * sqrt(n_survivors / cohort_target), so calibration divides by sqrt(1 - dropout).
+    """
     if cfg.noise_multiplier is not None:
         return cfg.noise_multiplier
-    expected = int(np.ceil(1.25 * cfg.rounds * min(cfg.clients_per_round, cfg.sites) / cfg.sites))
-    return noise_for_budget(expected, cfg.target_epsilon, cfg.delta)
+    k = min(cfg.clients_per_round, cfg.sites)
+    if cfg.accounting == "amplified":
+        needed = noise_for_budget(cfg.rounds, cfg.target_epsilon, cfg.delta, q=k / cfg.sites)
+    else:
+        expected = int(np.ceil(1.25 * cfg.rounds * k / cfg.sites))
+        needed = noise_for_budget(expected, cfg.target_epsilon, cfg.delta)
+    return needed / float(np.sqrt(max(1.0 - cfg.dropout_prob, 0.05)))
+
+
+def min_release(cfg: FedConfig, k_target: int) -> int:
+    """Fewest survivors for which a round is released. Fixes the lowest noise a release can
+    carry (sigma*sqrt(min_release/k_target)), which the budget guard and the abort rule share."""
+    return max(cfg.min_cohort, int(np.ceil(0.6 * k_target)))
 
 
 def server_lr(cfg: FedConfig, r: int) -> float:
@@ -65,22 +81,45 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
     world = world or make_world(cfg.sites, cfg.seed, cfg.dirichlet_alpha)
     model = build_model(world, cfg)
     g = Adapter.init(N_FEATURES, N_CLASSES, cfg.rank, rng)
-    acct = PrivacyAccountant(delta=cfg.delta, budget=cfg.target_epsilon)
+    amp = cfg.accounting == "amplified"
+    acct_part = PrivacyAccountant(delta=cfg.delta, budget=cfg.target_epsilon)
+    acct_amp = PrivacyAccountant(delta=cfg.delta, budget=cfg.target_epsilon,
+                                 orders=list(INT_ORDERS))
+    acct, acct_alt = (acct_amp, acct_part) if amp else (acct_part, acct_amp)
     audit = AuditLog()
     sigma = resolve_sigma(cfg) if cfg.dp else 0.0
     history, excluded = [], {}
 
     for r in range(1, cfg.rounds + 1):
-        eligible = [s for s in world.sites
-                    if not (cfg.dp and acct.would_exceed(s.site_id, sigma))]
+        # Budget guard uses the lowest noise a released round can carry (n = min_cohort). Under
+        # amplified accounting the sampling rate rises as sites drop out, so iterate to a fixpoint.
+        eligible = list(world.sites)
+        while True:
+            k_t = min(cfg.clients_per_round, len(eligible))
+            q_g = k_t / max(len(eligible), 1) if amp else 1.0
+            floor = sigma * float(np.sqrt(min_release(cfg, k_t) / max(k_t, 1)))
+            keep = [s for s in eligible
+                    if not (cfg.dp and acct.would_exceed(s.site_id, floor, q_g))]
+            if len(keep) == len(eligible):
+                break
+            eligible = keep
         for s in world.sites:
             if s not in eligible:
                 excluded.setdefault(s.site_id, r)  # budget exhausted: excluded from now on
-        k = min(cfg.clients_per_round, len(eligible))
-        if k < cfg.min_cohort:
+        k_target = min(cfg.clients_per_round, len(eligible))
+        if k_target < cfg.min_cohort:
             audit.record("coordinator", r, "0" * 64, event="halt:min-cohort")
             break
-        chosen = [eligible[i] for i in rng.choice(len(eligible), k, replace=False)]
+        q = k_target / len(eligible)
+        if cfg.sampling == "poisson":
+            chosen = [s for s in eligible if rng.random() < q]
+        else:
+            chosen = [eligible[i] for i in rng.choice(len(eligible), k_target, replace=False)]
+        k = len(chosen)
+        if k < cfg.min_cohort:
+            audit.record("coordinator", r, "0" * 64, event="round-aborted:small-cohort")
+            history.append(_row(r, model, world, g, acct, acct_alt, k, 0, aborted=True))
+            continue
         rc = RoundConfig(round=r, clients_per_round=k, local_epochs=cfg.local_epochs, lr=cfg.lr,
                          clip_norm=cfg.clip_norm, noise_multiplier=sigma,
                          strategy=cfg.strategy, mu=cfg.mu)
@@ -96,17 +135,23 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
                                  strategy=rc.strategy, mu=rc.mu, rng=rng)
             if cfg.dp:
                 delta, _ = clip_update(delta, rc.clip_norm)
-                delta = add_noise(delta, rc.clip_norm, sigma, k, rng)
-                acct.step(site.site_id, sigma, r)  # every selected site spends budget
+                # per-client std sigma*C/sqrt(target) => sum of n clients has std sigma*C*sqrt(n/target)
+                delta = add_noise(delta, rc.clip_norm, sigma, k_target, rng)
             audit.record(site.site_id, r, update_sha256(delta))
             raw_deltas.append(delta)
             if rng.random() < cfg.dropout_prob:
                 drops.add(i)
         survivors = [i for i in ids if i not in drops]
-        if len(survivors) < cfg.min_cohort:
+        if len(survivors) < min_release(cfg, k_target):
             audit.record("coordinator", r, "0" * 64, event="round-aborted:dropouts")
-            history.append(_row(r, model, world, g, acct, k, len(drops), aborted=True))
+            history.append(_row(r, model, world, g, acct, acct_alt, k, len(drops), aborted=True))
             continue
+        if cfg.dp:  # a sum was released: charge it
+            sigma_eff = sigma * float(np.sqrt(len(survivors) / k_target))
+            for site in chosen:
+                acct_part.step(site.site_id, sigma_eff, r)
+            for site in eligible:
+                acct_amp.step(site.site_id, sigma_eff, r, q=q)
         if cfg.aggregation == "product":
             # research option: server sees individual updates (no SecAgg)
             w = weights[survivors] / weights[survivors].sum()
@@ -116,7 +161,7 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
                 masked[i] = mask_update(raw_deltas[i] * weights[i], i, ids, session=r)
             total = aggregate(masked, ids, session=r, min_cohort=cfg.min_cohort)
             g = fed_avg_factors(g, server_lr(cfg, r) * total / weights[survivors].sum())
-        history.append(_row(r, model, world, g, acct, k, len(drops)))
+        history.append(_row(r, model, world, g, acct, acct_alt, k, len(drops)))
         if progress:
             progress(history[-1])
 
@@ -126,7 +171,7 @@ def run_federation(cfg: FedConfig, world: World | None = None, progress=None) ->
             personal[s.site_id] = train_personal(model, s, g, cfg, rng)
     for sid, r in excluded.items():
         audit.record(sid, r, "0" * 64, event="excluded:budget")
-    return FedResult(cfg, world, model, g, personal, history, acct, audit, excluded)
+    return FedResult(cfg, world, model, g, personal, history, acct, acct_alt, audit, excluded)
 
 
 def train_personal(model, site, g: Adapter, cfg: FedConfig, rng) -> Adapter:
@@ -136,9 +181,10 @@ def train_personal(model, site, g: Adapter, cfg: FedConfig, rng) -> Adapter:
                          lr=cfg.lr, frozen=(g,), rng=rng)
 
 
-def _row(r, model, world, g, acct, k, ndrop, aborted=False) -> dict:
+def _row(r, model, world, g, acct, acct_alt, k, ndrop, aborted=False) -> dict:
     hf = [_f1(model, s.heldout, g) for s in world.sites]
     eps = [acct.epsilon(s.site_id) for s in world.sites]
     return {"round": r, "participants": k, "dropped": ndrop, "aborted": aborted,
             "global_f1": _f1(model, world.test, g), "site_f1_mean": float(np.mean(hf)),
-            "eps_max": max(eps), "eps": dict(zip([s.site_id for s in world.sites], eps))}
+            "eps_max": max(eps), "eps_alt_max": max(acct_alt.epsilon(s.site_id) for s in world.sites),
+            "eps": dict(zip([s.site_id for s in world.sites], eps))}
