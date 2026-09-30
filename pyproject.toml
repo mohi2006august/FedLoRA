@@ -1,0 +1,22 @@
+[project]
+name = "fedlora"
+version = "0.1.0"
+description = "FedLoRA Health: privacy-preserving federated LoRA fine-tuning simulation"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "pydantic>=2", "typer>=0.12", "rich>=13", "pyyaml>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+fed = "fedlora.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fedlora"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
