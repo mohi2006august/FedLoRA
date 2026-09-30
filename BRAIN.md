@@ -119,7 +119,13 @@ Large Language Models: transformer networks trained on large text corpora to pre
 | Date | Decision | Reason |
 |---|---|---|
 | YYYY-MM-DD | LoRA-only communication | Tiny updates make secure aggregation and DP practical. |
+| 2026-09-30 | Simulation is pure numpy (linear softmax classifier with frozen NF4 base + LoRA), not PyTorch/Flower/Opacus | Keeps the privacy, SecAgg and aggregation logic testable on a laptop; the algorithms transfer to PEFT/Flower. Network transport (`fed client join`) is intentionally unimplemented. |
+| 2026-09-30 | Aggregate LoRA A and B separately by default; `aggregation: product` averages BA and re-factorises via SVD | Answers the PRD open question: factors are SecAgg-compatible and cheap; product is more faithful but the server sees individual updates. Tested that product error <= factor error. |
+| 2026-09-30 | Client-level DP: clip to C, each client adds N(0, sigma^2 C^2 / K) so the SecAgg sum carries N(0, sigma^2 C^2); uniform weights under DP | Sizes are not leaked and sensitivity of the mean is C/K. RDP accountant does not credit sampling amplification (conservative). |
+| 2026-09-30 | Decaying server step under DP (1 / (1 + 0.5 (r-1))) | DP noise is a random walk; at 8 sites F1 went 0.58 -> 0.82 with decay. Hurts slightly at 32 sites (0.90 -> 0.82). |
+| 2026-09-30 | Distillation prompts are mixups of a public pool; personal adapters label prompts locally | No real notes or personal adapters leave a site. Student rank must be >= ~6 for 8 classes (rank 3 could not separate them). |
 
 ## 8. Scratchpad
 
-- _Dump raw thoughts, links and half-formed ideas here._
+- **Finding (simulation, seed 0, default hyperparameters, 8 rounds):** the PRD targets (<= 3 pts to centralised, 100% of sites improved vs local-only) are **not met**. `fed sim --sites 8`: global F1 ~0.82 vs centralised ~0.90-0.98 (gap 8-10 pts); with 32 sites the DP gap was 13 pts. Non-DP FedProx with label-skewed sites also converges slowly and noisily in 10 rounds, so part of the gap is non-IID drift and untuned lr/epochs, not only DP noise. Results are noisy across hyperparameters (see `git log`); treat as a baseline to tune, and run the sweeps in section 5 before claiming any improvement.
+- Open: real Opacus DP-SGD (per-example) instead of client-level clipping; sampling-amplified accounting.

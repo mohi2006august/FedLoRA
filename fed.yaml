@@ -1,0 +1,13 @@
+# Example coordinator config: fed coordinator start --config fed.yaml
+sites: 8
+rounds: 10
+clients_per_round: 8
+min_cohort: 3
+strategy: fedprox
+mu: 0.01
+aggregation: factors   # "product" averages BA and re-factorises (no SecAgg; research option)
+target_epsilon: 8.0
+delta: 1.0e-5
+dp: true
+personalize: true
+seed: 0

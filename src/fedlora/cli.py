@@ -52,13 +52,16 @@ def _run(cfg: FedConfig, out: Path) -> dict:
 @app.command()
 def sim(sites: int = typer.Option(8, help="Number of synthetic hospitals."),
         dataset: str = typer.Option("clinical-notes-synthetic", help="Simulation dataset."),
-        rounds: int = 10, epsilon: float = 8.0, dp: bool = True, personalize: bool = True,
+        rounds: int = 10, clients_per_round: int = typer.Option(
+            0, help="Sites per round; 0 = 90% of sites (larger cohorts help DP)."),
+        epsilon: float = 8.0, dp: bool = True, personalize: bool = True,
         strategy: str = "fedprox", aggregation: str = "factors", seed: int = 0,
         out: Path = RUNS) -> None:
     """Simulated federation (synthetic notes split into hospitals)."""
     if dataset not in ("clinical-notes-synthetic", "clinical-notes-public"):
         raise typer.BadParameter("only the synthetic simulator is bundled")
-    cfg = FedConfig(sites=sites, rounds=rounds, target_epsilon=epsilon, dp=dp,
+    cohort = clients_per_round or max(3, int(round(0.9 * sites)))
+    cfg = FedConfig(sites=sites, rounds=rounds, clients_per_round=cohort, target_epsilon=epsilon, dp=dp,
                     personalize=personalize, strategy=strategy, aggregation=aggregation,
                     seed=seed)
     _run(cfg, out)

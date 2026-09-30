@@ -41,6 +41,11 @@ class World:
     test: Split  # balanced global test set with no dialect
 
 
+def site_name(i: int) -> str:
+    """hospital-a..z, then hospital-27, hospital-28, ... (filesystem-safe ids)."""
+    return f"hospital-{chr(97 + i)}" if i < 26 else f"hospital-{i + 1}"
+
+
 def _notes(rng, proto, dialect, labels, length=40, dialect_strength=1.0) -> np.ndarray:
     logits = proto[labels] + dialect_strength * dialect[None, :]
     p = np.exp(logits - logits.max(1, keepdims=True))
@@ -72,7 +77,7 @@ def make_world(
         cx = rng.dirichlet(np.full(N_FEATURES, 0.3), size=n_canaries)
         cy = rng.integers(0, N_CLASSES, size=n_canaries)
         sites.append(
-            Site(f"hospital-{chr(97 + i)}", Split(x, ys), Split(xh, yh), Split(cx, cy), dialect)
+            Site(site_name(i), Split(x, ys), Split(xh, yh), Split(cx, cy), dialect)
         )
     yp = rng.integers(0, N_CLASSES, size=200)
     public = Split(_notes(rng, proto + rng.normal(0, 1.2, proto.shape), zero, yp), yp)
