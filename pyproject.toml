@@ -7,6 +7,7 @@ dependencies = ["numpy>=1.26", "pydantic>=2", "typer>=0.12", "rich>=13", "pyyaml
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "opacus>=1.4"]  # opacus: accountant cross-check only
+torch = ["torch>=2.2", "peft>=0.10"]  # optional autograd backend + PEFT adapter interop
 
 [project.scripts]
 fed = "fedlora.cli:app"
