@@ -79,6 +79,7 @@ class Coordinator:
         self.site_pems: dict[str, bytes] = {}
         self.current: RoundState | None = None
         self.finished = False
+        self.done_seen: set[str] = set()
         self.excluded: dict[str, int] = {}
         self._rng = np.random.default_rng(cfg.seed + 7)
         self._http = self._make_server(host, port)
@@ -112,6 +113,11 @@ class Coordinator:
     def wait(self, timeout: float | None = None) -> bool:
         with self.cv:
             return self.cv.wait_for(lambda: self.finished, timeout)
+
+    def drain(self, timeout: float = 15.0) -> bool:
+        """After the last round, keep serving until every site has fetched its final model."""
+        with self.cv:
+            return self.cv.wait_for(lambda: set(self.present) <= self.done_seen, timeout)
 
     def stop(self) -> None:
         self._http.shutdown()
@@ -280,6 +286,8 @@ class Coordinator:
             while True:
                 self.present[site] = time.time()
                 if self.finished:
+                    self.done_seen.add(site)
+                    self.cv.notify_all()
                     return {"done": True, "global": arr_e(self.g.flat(), "<f8"),
                             "eps": self.acct.epsilon(site)}
                 rs = self.current

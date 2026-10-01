@@ -134,6 +134,7 @@ def coordinator_serve(config: Path = typer.Option(..., help="fed.yaml"),
     coord = Coordinator(cfg, certs_dir, host=host, port=port, phase_timeout=phase_timeout).start()
     console.print(f"coordinator listening on https://{host}:{coord.port} (mTLS required)")
     coord.wait()
+    coord.drain()
     coord.stop()
     save_json(out / "history.json", coord.history)
     save_json(out / "ledger.json", {
@@ -164,7 +165,11 @@ def client_join(site: str = typer.Option(..., envvar="SITE_ID", help="Site id, e
     else:
         from fedlora.sim.loaders import csv_site_data
         factory = csv_site_data(site, Path(data.removeprefix("csv:")))
-    res = SiteClient(site, coordinator_url, certs_dir, factory).run()
+    try:
+        res = SiteClient(site, coordinator_url, certs_dir, factory).run()
+    except ConnectionError as e:
+        console.print(f"error: {e}")
+        raise typer.Exit(code=1)
     console.print(f"{site}: took part in {res.rounds_participated} rounds; "
                   f"coordinator-reported eps {res.epsilon:.2f}")
 

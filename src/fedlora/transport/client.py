@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import ssl
+import time
 import urllib.error
 import urllib.request
 import zlib
@@ -72,6 +73,17 @@ class SiteClient:
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"{path}: HTTP {e.code} {e.read().decode()[:200]}") from e
 
+    def _poll(self, after: int, attempts: int = 4) -> dict:
+        """GET /round is idempotent, so transient network errors are retried with backoff."""
+        for i in range(attempts):
+            try:
+                return self._call("GET", f"/round?after={after}")
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+                if i == attempts - 1:
+                    raise ConnectionError(f"coordinator unreachable: {e}") from e
+                time.sleep(1.0 * 2 ** i)
+        raise AssertionError("unreachable")
+
     # ---- main loop -------------------------------------------------------------------------
     def run(self) -> SiteResult:
         cfgj = self._call("GET", "/config")
@@ -81,7 +93,7 @@ class SiteClient:
         model = LoRAClassifier(w0, b0, cfg.alpha, cfg.rank, quantize=True)
         after = 0
         while True:
-            msg = self._call("GET", f"/round?after={after}")
+            msg = self._poll(after)
             if msg.get("done"):
                 g = _adapter(msg["global"], cfg)
                 rng = np.random.default_rng([cfg.seed, zlib.crc32(self.site_id.encode())])
