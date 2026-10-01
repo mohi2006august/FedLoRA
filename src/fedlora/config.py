@@ -30,6 +30,7 @@ class SiteReport(BaseModel):
 class FedConfig(BaseModel):
     """Whole-federation configuration (fed.yaml)."""
 
+    dataset: str = Field("synthetic", description="synthetic | csv:<path> (see sim/loaders.py)")
     sites: int = 8
     rounds: int = 10
     clients_per_round: int = 8

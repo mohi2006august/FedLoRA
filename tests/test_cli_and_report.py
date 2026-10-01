@@ -45,8 +45,17 @@ def test_bucketing_and_ledger_warning():
     assert "⚠" in privacy_ledger({"a": 7.0, "b": 1.0}, 8.0, 1e-5)
 
 
-def test_client_join_refuses_without_transport():
-    assert runner.invoke(app, ["client", "join", "--site", "hospital-a"]).exit_code == 2
+def test_client_join_requires_coordinator_and_certs(monkeypatch):
+    monkeypatch.delenv("FED_COORDINATOR_URL", raising=False)
+    monkeypatch.delenv("FED_CERT_PATH", raising=False)
+    r = runner.invoke(app, ["client", "join", "--site", "hospital-a"])
+    assert r.exit_code == 2 and "FED_COORDINATOR_URL" in r.output
+
+
+def test_certs_command_writes_pki(tmp_path):
+    r = runner.invoke(app, ["certs", "--out", str(tmp_path / "pki"), "--sites", "hospital-a,hospital-b"])
+    assert r.exit_code == 0
+    assert (tmp_path / "pki" / "hospital-b.key").exists() and (tmp_path / "pki" / "ca.pem").exists()
 
 
 def test_sweep_command_runs():

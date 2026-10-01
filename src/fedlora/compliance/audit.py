@@ -46,6 +46,16 @@ class AuditLog:
         self.entries.append(e)
         return e
 
+    def record_signed(self, site_id: str, round_no: int, sha: str, sig_b64: str) -> dict:
+        """Entry whose signature was made with the site's own (Ed25519) key and verified by the
+        caller; verify_chain checks only the hash chain for these."""
+        prev = self.entries[-1]["chain"] if self.entries else "0" * 64
+        e = {"site": site_id, "round": round_no, "event": "update-signed", "sha256": sha,
+             "sig": sig_b64, "alg": "ed25519"}
+        e["chain"] = hashlib.sha256((prev + json.dumps(e, sort_keys=True)).encode()).hexdigest()
+        self.entries.append(e)
+        return e
+
     def verify_chain(self) -> bool:
         prev = "0" * 64
         for e in self.entries:

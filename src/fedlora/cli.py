@@ -51,7 +51,7 @@ def _run(cfg: FedConfig, out: Path) -> dict:
 
 @app.command()
 def sim(sites: int = typer.Option(8, help="Number of synthetic hospitals."),
-        dataset: str = typer.Option("clinical-notes-synthetic", help="Simulation dataset."),
+        dataset: str = typer.Option("synthetic", help="synthetic | csv:<path> (text,label columns)"),
         rounds: int = 10, clients_per_round: int = typer.Option(
             0, help="Sites per round; 0 = 90% of sites (larger cohorts help DP)."),
         epsilon: float = 8.0, dp: bool = True, personalize: bool = True,
@@ -61,10 +61,12 @@ def sim(sites: int = typer.Option(8, help="Number of synthetic hospitals."),
         accounting: str = typer.Option("participation", help="participation | amplified"),
         out: Path = RUNS) -> None:
     """Simulated federation (synthetic notes split into hospitals)."""
-    if dataset not in ("clinical-notes-synthetic", "clinical-notes-public"):
-        raise typer.BadParameter("only the synthetic simulator is bundled")
+    if dataset in ("clinical-notes-synthetic", "clinical-notes-public"):  # spec aliases
+        dataset = "synthetic"
+    if dataset != "synthetic" and not dataset.startswith("csv:"):
+        raise typer.BadParameter("dataset must be 'synthetic' or 'csv:<path>'")
     cohort = clients_per_round or max(3, int(round(0.9 * sites)))
-    cfg = FedConfig(sites=sites, rounds=rounds, clients_per_round=cohort, target_epsilon=epsilon, dp=dp,
+    cfg = FedConfig(dataset=dataset, sites=sites, rounds=rounds, clients_per_round=cohort, target_epsilon=epsilon, dp=dp,
                     personalize=personalize, strategy=strategy, aggregation=aggregation,
                     seed=seed, sampling=sampling, accounting=accounting, dp_mode=dp_mode)
     _run(cfg, out)
@@ -104,17 +106,67 @@ def coordinator_start(config: Path = typer.Option(..., help="fed.yaml"), out: Pa
     _run(cfg, out)
 
 
+@app.command("certs")
+def certs_init(out: Path = typer.Option(Path("certs"), help="Directory for the private PKI."),
+               sites: str = typer.Option(..., help="Comma-separated site ids."),
+               hosts: str = typer.Option("localhost,127.0.0.1", help="Coordinator SAN hosts.")) -> None:
+    """Create a CA, a coordinator certificate and one certificate per site (mTLS)."""
+    from fedlora.transport.certs import init_pki
+
+    ids = [x.strip() for x in sites.split(",") if x.strip()]
+    init_pki(out, ids, tuple(h.strip() for h in hosts.split(",")))
+    console.print(f"PKI written to {out}/ for {len(ids)} sites. Keep *.key private; never commit them.")
+
+
+@coordinator.command("serve")
+def coordinator_serve(config: Path = typer.Option(..., help="fed.yaml"),
+                      certs_dir: Path = typer.Option(None, "--certs", envvar="FED_CERT_PATH"),
+                      host: str = "0.0.0.0", port: int = 8443, out: Path = RUNS,
+                      phase_timeout: float = 60.0) -> None:
+    """Run the real networked coordinator (HTTPS, mutual TLS, secure aggregation)."""
+    from fedlora.compliance.report import save_json
+    from fedlora.transport.server import Coordinator
+
+    if certs_dir is None:
+        console.print("Set --certs or FED_CERT_PATH (see `fed certs`).")
+        raise typer.Exit(code=2)
+    cfg = FedConfig(**yaml.safe_load(config.read_text(encoding="utf-8")))
+    coord = Coordinator(cfg, certs_dir, host=host, port=port, phase_timeout=phase_timeout).start()
+    console.print(f"coordinator listening on https://{host}:{coord.port} (mTLS required)")
+    coord.wait()
+    coord.stop()
+    save_json(out / "history.json", coord.history)
+    save_json(out / "ledger.json", {
+        "budget": cfg.target_epsilon, "delta": cfg.delta, "accounting": "participation",
+        "dp_mode": "client", "entries": coord.acct.ledger, "excluded": coord.excluded,
+        "eps": {s: coord.acct.epsilon(s) for s in sorted(coord.present)}, "eps_alt": {}})
+    coord.audit.export(str(out / "audit.jsonl"))
+    console.print(f"done: {len(coord.history)} rounds; artefacts in {out}/")
+
+
 @client.command("join")
-def client_join(site: str = typer.Option(..., help="Site id, e.g. hospital-a")) -> None:
-    """Validate site environment. Networked transport (Flower + mTLS) is not implemented yet."""
-    env = {k: os.environ.get(k) for k in ("FED_COORDINATOR_URL", "FED_CERT_PATH")}
-    missing = [k for k, v in env.items() if not v]
-    console.print(f"site: {site}")
+def client_join(site: str = typer.Option(..., envvar="SITE_ID", help="Site id, e.g. hospital-a"),
+                coordinator_url: str = typer.Option(None, "--coordinator",
+                                                    envvar="FED_COORDINATOR_URL"),
+                certs_dir: Path = typer.Option(None, "--certs", envvar="FED_CERT_PATH"),
+                data: str = typer.Option("sim", help="'sim' (synthetic) or csv:<path> (local notes)")
+                ) -> None:
+    """Join the federation as a site. Data is read locally and never transmitted."""
+    from fedlora.transport.client import SiteClient, sim_data
+
+    missing = [n for n, v in (("FED_COORDINATOR_URL / --coordinator", coordinator_url),
+                              ("FED_CERT_PATH / --certs", certs_dir)) if not v]
     if missing:
-        console.print(f"missing environment: {', '.join(missing)}")
-    console.print("Networked client transport is not implemented; use `fed sim` or "
-                  "`fed coordinator start`.")
-    raise typer.Exit(code=2)
+        console.print(f"missing: {', '.join(missing)}")
+        raise typer.Exit(code=2)
+    if data == "sim":
+        factory = sim_data(site)
+    else:
+        from fedlora.sim.loaders import csv_site_data
+        factory = csv_site_data(site, Path(data.removeprefix("csv:")))
+    res = SiteClient(site, coordinator_url, certs_dir, factory).run()
+    console.print(f"{site}: took part in {res.rounds_participated} rounds; "
+                  f"coordinator-reported eps {res.epsilon:.2f}")
 
 
 @privacy.command("report")
@@ -159,14 +211,14 @@ def distill(student: str = typer.Option("3B", help="Student size: 1B, 3B or 7B."
     from fedlora.distill.distiller import agreement, distill as do_distill, evaluate_student
     from fedlora.model import Adapter
     from fedlora.personalize.local import PersonalModel
-    from fedlora.sim.data import make_world
+    from fedlora.sim.loaders import build_world
 
     f = run / "summary.json"
     if not f.exists():
         console.print("No run found; run `fed sim` first.")
         raise typer.Exit(code=1)
     cfg = FedConfig(**json.loads(f.read_text(encoding="utf-8"))["config"])
-    world = make_world(cfg.sites, cfg.seed, cfg.dirichlet_alpha)
+    world = build_world(cfg)
     model = build_model(world, cfg)
     z = np.load(run / "global_adapter.npz")
     g = Adapter(z["A"], z["B"])

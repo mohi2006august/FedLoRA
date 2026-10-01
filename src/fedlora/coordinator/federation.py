@@ -23,7 +23,8 @@ from fedlora.coordinator.strategies import (
 from fedlora.personalize.local import PersonalModel, personalize_site
 from fedlora.model import Adapter, LoRAClassifier, macro_f1, pretrain_base
 from fedlora.secagg.protocol import SecAggError, secure_sum
-from fedlora.sim.data import N_CLASSES, N_FEATURES, Split, World, make_world
+from fedlora.sim.data import N_CLASSES, N_FEATURES, Split, World
+from fedlora.sim.loaders import build_world
 
 
 @dataclass
@@ -97,7 +98,7 @@ def _f1(model: LoRAClassifier, split: Split, *ads: Adapter) -> float:
 
 def run_federation(cfg: FedConfig, world: World | None = None, progress=None) -> FedResult:
     rng = np.random.default_rng(cfg.seed)
-    world = world or make_world(cfg.sites, cfg.seed, cfg.dirichlet_alpha)
+    world = world or build_world(cfg)
     model = build_model(world, cfg)
     g = Adapter.init(N_FEATURES, N_CLASSES, cfg.rank, rng)
     amp = cfg.accounting == "amplified"
