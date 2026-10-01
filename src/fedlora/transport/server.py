@@ -60,12 +60,13 @@ class RoundState:
 class Coordinator:
     def __init__(self, cfg: FedConfig, cert_dir: Path, *, host: str = "127.0.0.1", port: int = 0,
                  phase_timeout: float = 20.0, join_timeout: float = 30.0,
-                 report_timeout: float = 3.0):
+                 report_timeout: float = 3.0, cohort_grace: float = 3.0):
         if cfg.dp_mode != "client":
             raise ValueError("networked mode supports client-level DP only")
         self.cfg, self.cert_dir = cfg, cert_dir
         self.phase_timeout, self.join_timeout, self.report_timeout = (
             phase_timeout, join_timeout, report_timeout)
+        self.cohort_grace = cohort_grace  # how long to wait for a full cohort once min_cohort is met
         self.ca = certs.load_cert((cert_dir / "ca.pem").read_bytes())
         self.cv = threading.Condition()
         self.sigma = resolve_sigma(cfg) if cfg.dp else 0.0
@@ -134,25 +135,29 @@ class Coordinator:
         return out
 
     def _await_cohort(self) -> list[str] | None:
-        deadline = time.time() + self.join_timeout
+        deadline = time.monotonic() + self.join_timeout
+        reached_min: float | None = None
         with self.cv:
             while True:
-                fresh = {s for s, t in self.present.items() if time.time() - t < 15}
+                fresh = {s for s, t in self.present.items() if time.monotonic() - t < 15}
                 k_t = min(self.cfg.clients_per_round, len(fresh))
                 floor = self.sigma * float(np.sqrt(min_release(self.cfg, max(k_t, 1)) / max(k_t, 1)))
                 el = [s for s in self._eligible(floor, k_t) if s in fresh]
                 if len(el) >= max(self.cfg.min_cohort, 1):
-                    k = min(self.cfg.clients_per_round, len(el))
-                    return sorted(self._rng.choice(el, k, replace=False).tolist())
-                if time.time() > deadline:
+                    reached_min = reached_min or time.monotonic()
+                    full = len(el) >= self.cfg.clients_per_round
+                    if full or time.monotonic() - reached_min >= self.cohort_grace:
+                        k = min(self.cfg.clients_per_round, len(el))
+                        return sorted(self._rng.choice(el, k, replace=False).tolist())
+                if time.monotonic() > deadline:
                     return None
                 self.cv.wait(0.2)
 
     def _wait_phase(self, rs: RoundState, name: str, expected: set[str]) -> None:
-        deadline = time.time() + self.phase_timeout
+        deadline = time.monotonic() + self.phase_timeout
         with self.cv:
             ph = rs.phases[name]
-            while not expected <= set(ph.sub) and time.time() < deadline and not rs.abort:
+            while not expected <= set(ph.sub) and time.monotonic() < deadline and not rs.abort:
                 self.cv.wait(0.05)
 
     def _close(self, rs: RoundState, name: str) -> None:
@@ -269,10 +274,10 @@ class Coordinator:
         self.audit.record_signed(site, r, sha, payload["upload_sig"])
 
     def _wait_reports(self, rs: RoundState) -> None:
-        deadline = time.time() + self.report_timeout
+        deadline = time.monotonic() + self.report_timeout
         with self.cv:
             want = set(rs.phases["unmask"].sub)
-            while want - set(self.reports.get(rs.r, {})) and time.time() < deadline:
+            while want - set(self.reports.get(rs.r, {})) and time.monotonic() < deadline:
                 self.cv.wait(0.05)
 
     # ---- request handling (called from handler threads) --------------------------------------
@@ -280,11 +285,11 @@ class Coordinator:
         return {"cfg": self.cfg.model_dump(mode="json"), "sigma": self.sigma}
 
     def poll_round(self, site: str, pem: bytes, after: int, wait: float = 25.0) -> dict:
-        deadline = time.time() + wait
+        deadline = time.monotonic() + wait
         with self.cv:
             self.site_pems[site] = pem
             while True:
-                self.present[site] = time.time()
+                self.present[site] = time.monotonic()
                 if self.finished:
                     self.done_seen.add(site)
                     self.cv.notify_all()
@@ -302,7 +307,7 @@ class Coordinator:
                             "clip": self.cfg.clip_norm, "lr": self.cfg.lr,
                             "epochs": self.cfg.local_epochs, "mu": self.cfg.mu,
                             "strategy": self.cfg.strategy, "dp": self.cfg.dp}
-                if time.time() > deadline:
+                if time.monotonic() > deadline:
                     return {"round": after, "participant": False, "idle": True}
                 self.cv.wait(0.2)
 

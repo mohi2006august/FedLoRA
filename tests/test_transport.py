@@ -24,7 +24,7 @@ def _run(tmp_path, cfg, fail=None, phase_timeout=10.0):
     ids = [site_name(i) for i in range(cfg.sites)]
     certs.init_pki(tmp_path, ids)
     coord = Coordinator(cfg, tmp_path, phase_timeout=phase_timeout, join_timeout=20,
-                        report_timeout=2).start()
+                        report_timeout=2, cohort_grace=10).start()
     url = f"https://127.0.0.1:{coord.port}"
     results, errors = {}, []
 
